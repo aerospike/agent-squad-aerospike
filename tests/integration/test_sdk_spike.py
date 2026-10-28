@@ -1,8 +1,7 @@
-
 from uuid import uuid4
 
 import pytest
-from aerospike_sdk import Client, DataSet
+from aerospike_sdk import ClusterDefinition, DataSet
 
 from agent_squad_aerospike._sdk import atomic_append
 
@@ -10,7 +9,7 @@ from agent_squad_aerospike._sdk import atomic_append
 @pytest.mark.integration
 async def test_atomic_append_uses_one_public_sdk_write_segment() -> None:
     key = DataSet.of("test", "as_spike").id(uuid4().hex)
-    async with Client("localhost:3000") as client:
+    async with ClusterDefinition("localhost", 3000).connect() as client:
         session = client.create_session()
 
         assert await atomic_append(

@@ -8,7 +8,7 @@ Asynchronous Aerospike Community Edition-compatible chat storage for Agent Squad
 pip install agent-squad-aerospike
 ```
 
-The initial release supports Python 3.11–3.14, Agent Squad `>=1.1.3,<1.2`, Aerospike Developer SDK `>=0.9.0a5,<0.10`, and Aerospike Database 6.0 or later. It requires only Community Edition database features.
+The initial release supports Python 3.11–3.14, Agent Squad `>=1.1.3,<1.2`, and Aerospike Developer SDK `>=1.0,<2`. The SDK supports **Aerospike Server 8.2.0 or later only** — earlier server versions are unsupported. Community Edition is fully supported; TLS and PKI certificate authentication are optional Enterprise features, never required.
 
 ## Usage
 
@@ -37,6 +37,50 @@ There is no client-side encoded-message or conversation-record byte limit, match
 
 Adapter TTL is disabled by default, deferring to namespace policy. A positive `ttl_seconds` requires a positive `membership_refresh_seconds` strictly below the TTL. Credentials are optional runtime settings; never put secrets in source control.
 
+### TLS
+
+TLS is optional and disabled by default — a `TlsSettings` object on `AerospikeConfig.tls` switches every cluster connection to TLS with certificate verification enforced (no plaintext fallback).
+
+```python
+from agent_squad_aerospike import AerospikeChatStorage, AerospikeConfig, TlsSettings
+
+config = AerospikeConfig(
+    # Seeds accept host:port or host:tls_name:port; a seed-level TLS name
+    # overrides the cluster-wide tls_name for that node. IPv6 seeds must use
+    # brackets ([::1]:tls_name:4333) to carry a TLS name — a bare IPv6 seed
+    # like ::1:3000 keeps the plain host:port interpretation.
+    seeds=("db-a.example.com:prod-tls:4333", "db-b.example.com:4333"),
+    tls=TlsSettings(
+        ca_file="/etc/aerospike/ca.pem",        # omit to use the system trust store
+        tls_name="prod-tls",                    # cluster-wide fallback TLS name
+        client_cert_file="/etc/aerospike/client.pem",  # optional mTLS pair
+        client_key_file="/etc/aerospike/client.key",
+        protocols=("TLSv1.3",),                 # optional allowlists;
+        ciphers=None,                           # None selects SDK defaults
+    ),
+)
+```
+
+Every cluster node must serve TLS with a consistent certificate identity: Aerospike is a smart-client database, so discovered nodes are contacted directly and each one is verified.
+
+`for_login_only=True` is a different contract: only the credential exchange is encrypted — after authentication, data connections to cluster nodes open in **cleartext**. It requires `username`/`password` and does not encrypt data operations.
+
+#### PKI certificate authentication
+
+`auth_mode="certificate"` authenticates with the client certificate's CN mapped to an Aerospike user — no password exists. It requires TLS settings with a paired client certificate and key, forbids `username`/`password`, and requires every seed to resolve a TLS name (per-seed or cluster-wide).
+
+```python
+config = AerospikeConfig(
+    seeds=("db-a.example.com:prod-tls:4333",),
+    auth_mode="certificate",
+    tls=TlsSettings(
+        ca_file="/etc/aerospike/ca.pem",
+        client_cert_file="/etc/aerospike/client.pem",
+        client_key_file="/etc/aerospike/client.key",
+    ),
+)
+```
+
 ## Data model and behavior
 
 Each `(user_id, session_id, agent_id)` has one conversation record. Each `(user_id, session_id)` has one bounded directory record mapping agent IDs to ordering metadata. Domain-separated, length-prefixed identifier tuples are hashed into primary keys. Fixed sets, primary-key reads, and batch reads avoid scans and secondary indexes.
@@ -60,7 +104,20 @@ The included server uses namespace `test`, persistent file-backed storage, ports
 
 Aerospike is a smart client database. Applications must directly reach every advertised cluster node. Multiple seeds improve bootstrap resilience but are not a proxy data path; do not put a generic load balancer in front of seed hosts. Configure credentials and advertised or alternate addresses so every discovered node remains reachable.
 
-TLS configuration, vector search and AVS, graph/AGS, TypeScript, Swift, multi-record transactions, durable deletes, rack awareness, and directory sharding are outside this package's scope.
+The repository also carries an opt-in TLS test fixture for development (not required for normal runs):
+
+```shell
+sh docker/gen-tls-certs.sh                                  # throwaway PKI material
+docker compose --profile tls up -d --wait aerospike-tls     # EE eval image
+sh docker/provision-pki-user.sh                             # map cert CN to a user
+AEROSPIKE_TLS_SEED=127.0.0.1:aerospike-tls:4433 \
+AEROSPIKE_TLS_CA=docker/tls-certs/ca.crt \
+pytest -m tls
+```
+
+The fixture runs the released `aerospike/aerospike-server-enterprise:8.2.0.1` image — its single-node eval feature key is baked in, so it is suitable only for a one-node test target. `AEROSPIKE_TLS_IMAGE` and the other `AEROSPIKE_TLS_*` variables in `tests/integration/test_tls.py` override fixture details. Without the env vars the `tls` tests skip cleanly.
+
+Vector search and AVS, graph/AGS, TypeScript, Swift, multi-record transactions, durable deletes, rack awareness, and directory sharding are outside this package's scope.
 
 ## Benchmarking
 

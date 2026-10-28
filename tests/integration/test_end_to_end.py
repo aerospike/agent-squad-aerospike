@@ -1,9 +1,8 @@
-
 import asyncio
 from uuid import uuid4
 
 import pytest
-from aerospike_sdk import Client
+from aerospike_sdk import ClusterDefinition
 from agent_squad.types import ConversationMessage, ParticipantRole
 
 from agent_squad_aerospike import AerospikeChatStorage, AerospikeConfig, DirectoryFullError
@@ -27,7 +26,7 @@ async def test_self_created_storage_persists_across_connections() -> None:
 @pytest.mark.integration
 async def test_rich_message_end_to_end() -> None:
     session_id = uuid4().hex
-    async with Client("localhost:3000") as client:
+    async with ClusterDefinition("localhost", 3000).connect() as client:
         storage = AerospikeChatStorage(
             client.create_session(),
             AerospikeConfig(hard_history_limit=4),
@@ -70,7 +69,7 @@ async def test_history_limit_discards_oldest_messages() -> None:
         )
         for index in range(6)
     ]
-    async with Client("localhost:3000") as client:
+    async with ClusterDefinition("localhost", 3000).connect() as client:
         storage = AerospikeChatStorage(
             client.create_session(),
             AerospikeConfig(hard_history_limit=4),
@@ -91,7 +90,7 @@ async def test_history_limit_discards_oldest_messages() -> None:
 async def test_process_restart_and_sliding_ttl() -> None:
     session_id = uuid4().hex
     config = AerospikeConfig(ttl_seconds=2, membership_refresh_seconds=1)
-    async with Client("localhost:3000") as client:
+    async with ClusterDefinition("localhost", 3000).connect() as client:
         session = client.create_session()
         first = AerospikeChatStorage(session, config)
         assert await first.save_chat_message(
@@ -114,7 +113,7 @@ async def test_adversarial_role_value_suppression_still_holds() -> None:
     adversarial_role = 'user" or "1"=="1'
     first = ConversationMessage(adversarial_role, [{"text": "first"}])
     second = ConversationMessage(adversarial_role, [{"text": "second"}])
-    async with Client("localhost:3000") as client:
+    async with ClusterDefinition("localhost", 3000).connect() as client:
         storage = AerospikeChatStorage(
             client.create_session(),
             AerospikeConfig(hard_history_limit=4),
@@ -127,7 +126,7 @@ async def test_adversarial_role_value_suppression_still_holds() -> None:
 async def test_adversarial_agent_id_does_not_crash_or_bypass_membership_guard() -> None:
     session_id = uuid4().hex
     adversarial_agent = 'agent"bad'
-    async with Client("localhost:3000") as client:
+    async with ClusterDefinition("localhost", 3000).connect() as client:
         storage = AerospikeChatStorage(
             client.create_session(),
             AerospikeConfig(max_agents_per_session=1),

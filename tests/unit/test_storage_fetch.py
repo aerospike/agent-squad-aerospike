@@ -1,9 +1,8 @@
-
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from aerospike_async import ResultCode
+from aerospike_native import ResultCode
 from agent_squad.types import ConversationMessage, ParticipantRole
 
 from agent_squad_aerospike import AerospikeChatStorage
@@ -48,7 +47,7 @@ class Query:
         self.rows = rows
         self.include_missing = False
 
-    def respond_all_keys(self) -> "Query":
+    def include_missing_keys(self) -> "Query":
         self.include_missing = True
         return self
 
@@ -110,7 +109,7 @@ async def test_fetch_all_chats_batches_orders_attributes_and_tolerates_missing()
         ),
     ]
     session = Mock()
-    session.query.side_effect = [Query([directory]), Query(conversations).respond_all_keys()]
+    session.query.side_effect = [Query([directory]), Query(conversations).include_missing_keys()]
     storage = AerospikeChatStorage(session)
     messages = await storage.fetch_all_chats("u", "s")
     assert [message.content for message in messages] == [
@@ -138,7 +137,7 @@ async def test_fetch_all_chats_missing_record_does_not_mislabel_remaining_agents
         ),
     ]
     session = Mock()
-    session.query.side_effect = [Query([directory]), Query(conversations).respond_all_keys()]
+    session.query.side_effect = [Query([directory]), Query(conversations).include_missing_keys()]
     storage = AerospikeChatStorage(session)
     messages = await storage.fetch_all_chats("u", "s")
     assert [message.content for message in messages] == [
@@ -164,7 +163,7 @@ async def test_fetch_all_chats_ignores_stream_order() -> None:
         ),
     ]
     session = Mock()
-    session.query.side_effect = [Query([directory]), Query(conversations).respond_all_keys()]
+    session.query.side_effect = [Query([directory]), Query(conversations).include_missing_keys()]
     storage = AerospikeChatStorage(session)
     messages = await storage.fetch_all_chats("u", "s")
     assert [message.content for message in messages] == [
@@ -179,7 +178,7 @@ async def test_fetch_all_chats_surfaces_per_key_failures() -> None:
     session = Mock()
     session.query.side_effect = [
         Query([row({"agents": {"a": 1}})]),
-        Query([failed]).respond_all_keys(),
+        Query([failed]).include_missing_keys(),
     ]
     storage = AerospikeChatStorage(session)
     with pytest.raises(RuntimeError, match="batch failed"):
