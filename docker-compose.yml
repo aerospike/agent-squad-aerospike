@@ -1,12 +1,29 @@
 services:
   aerospike:
-    image: aerospike/aerospike-server:8.1.2.5
+    image: aerospike/aerospike-server:8.2.0.1
     command: ["--config-file", "/opt/aerospike/etc/aerospike.conf"]
     ports:
       - "3000-3002:3000-3002"
     volumes:
       - ./docker/aerospike.conf:/opt/aerospike/etc/aerospike.conf:ro
       - aerospike-data:/opt/aerospike/data
+    healthcheck:
+      test: ["CMD", "asinfo", "-v", "status"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # Opt-in TLS fixture: Enterprise Edition eval image (single-node feature key
+  # baked in). Start with `docker compose --profile tls up -d aerospike-tls`.
+  # Tested image: aerospike/aerospike-server-enterprise:8.2.0.1
+  aerospike-tls:
+    profiles: ["tls"]
+    image: aerospike/aerospike-server-enterprise:8.2.0.1
+    ports:
+      - "4433:4333"
+    volumes:
+      - ./docker/aerospike-tls.conf:/etc/aerospike/aerospike.template.conf:ro
+      - ./docker/tls-certs:/opt/aerospike/certs:ro
     healthcheck:
       test: ["CMD", "asinfo", "-v", "status"]
       interval: 2s

@@ -1,7 +1,6 @@
-
 from typing import Any
 
-from aerospike_async import ResultCode
+from aerospike_native import ResultCode
 from aerospike_sdk import CTX, AerospikeError, Exp, ExpType, MapReturnType
 
 from .exceptions import AmbiguousWriteError, ConversationTooLargeError, DirectoryFullError
@@ -40,23 +39,25 @@ async def register_membership(
     max_agents: int,
     ttl_seconds: int | None,
 ) -> None:
-    expression = Exp.or_([
-        Exp.not_(Exp.bin_exists("agents")),
-        Exp.eq(
-            Exp.map_get_by_key(
-                MapReturnType.EXISTS,
-                ExpType.BOOL,
-                Exp.string_val(agent_id),
-                Exp.map_bin("agents"),
-                [],
+    expression = Exp.or_(
+        [
+            Exp.not_(Exp.bin_exists("agents")),
+            Exp.eq(
+                Exp.map_get_by_key(
+                    MapReturnType.EXISTS,
+                    ExpType.BOOL,
+                    Exp.string_val(agent_id),
+                    Exp.map_bin("agents"),
+                    [],
+                ),
+                Exp.bool_val(True),
             ),
-            Exp.bool_val(True),
-        ),
-        Exp.lt(
-            Exp.map_size(Exp.map_bin("agents"), []),
-            Exp.int_val(max_agents),
-        ),
-    ])
+            Exp.lt(
+                Exp.map_size(Exp.map_bin("agents"), []),
+                Exp.int_val(max_agents),
+            ),
+        ]
+    )
     operation = (
         session.upsert(key)
         .where(expression)
@@ -90,20 +91,22 @@ async def atomic_append(
     updated: int,
     ttl_seconds: int | None,
 ) -> bool:
-    expression = Exp.or_([
-        Exp.not_(Exp.bin_exists("msgs")),
-        Exp.eq(Exp.list_size(Exp.list_bin("msgs"), []), Exp.int_val(0)),
-        Exp.ne(
-            Exp.map_get_by_key(
-                MapReturnType.VALUE,
-                ExpType.STRING,
-                Exp.string_val("role"),
-                Exp.list_bin("msgs"),
-                [CTX.list_index(-1)],
+    expression = Exp.or_(
+        [
+            Exp.not_(Exp.bin_exists("msgs")),
+            Exp.eq(Exp.list_size(Exp.list_bin("msgs"), []), Exp.int_val(0)),
+            Exp.ne(
+                Exp.map_get_by_key(
+                    MapReturnType.VALUE,
+                    ExpType.STRING,
+                    Exp.string_val("role"),
+                    Exp.list_bin("msgs"),
+                    [CTX.list_index(-1)],
+                ),
+                Exp.string_val(first_role),
             ),
-            Exp.string_val(first_role),
-        ),
-    ])
+        ]
+    )
     operation = (
         session.upsert(key)
         .where(expression)

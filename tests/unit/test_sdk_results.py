@@ -1,8 +1,7 @@
-
 from types import SimpleNamespace
 
 import pytest
-from aerospike_async import ResultCode
+from aerospike_native import ResultCode
 
 from agent_squad_aerospike import AmbiguousWriteError, ConversationTooLargeError
 from agent_squad_aerospike._sdk import inspect_batch_results, map_write_failure

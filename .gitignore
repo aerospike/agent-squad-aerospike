@@ -6,3 +6,6 @@
 .venv/
 __pycache__/
 dist/
+
+# Generated throwaway TLS fixture material (docker/gen-tls-certs.sh)
+docker/tls-certs/

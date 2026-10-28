@@ -11,7 +11,7 @@ license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
   "agent-squad>=1.1.3,<1.2",
-  "aerospike-sdk>=0.9.0a5,<0.10",
+  "aerospike-sdk>=1.0,<2",
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -49,7 +49,10 @@ packages = ["src/agent_squad_aerospike"]
 [tool.pytest.ini_options]
 addopts = "--strict-markers"
 asyncio_mode = "auto"
-markers = ["integration: requires Aerospike Community Edition"]
+markers = [
+  "integration: requires Aerospike Community Edition",
+  "tls: requires a TLS-capable Aerospike Enterprise server (opt-in)",
+]
 testpaths = ["tests"]
 
 [tool.ruff]
@@ -70,5 +73,5 @@ packages = ["agent_squad_aerospike"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["aerospike_async.*", "agent_squad.*"]
+module = ["aerospike_native.*", "agent_squad.*"]
 ignore_missing_imports = true
