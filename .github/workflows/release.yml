@@ -1,0 +1,154 @@
+name: Release
+
+# Builds, GPG-signs, and deploys the sdist and wheel to JFrog (connect pypi-dev-local) via
+# aerospike/shared-workflows.
+#
+# Runs in one of three modes, resolved by the `version` job:
+#   release  push of a version tag (vX.Y.Z, vX.Y.ZrcN, ...). The tag minus its leading v must equal
+#            the version in pyproject.toml. Deploys, creates the release bundle, and promotes it to
+#            DEV and TEST.
+#   dev      workflow_dispatch on any branch. Deploys as <pyproject.toml version>.dev<run number>
+#            and creates no release bundle. The dry-run input builds and signs without uploading.
+#   check    pull request touching this workflow or pyproject.toml. Same as dev, always dry run.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - pyproject.toml
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Build and sign without uploading anything to JFrog
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+  packages: write
+  attestations: write
+
+jobs:
+  version:
+    name: Resolve Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      is-release: ${{ steps.v.outputs.is-release }}
+      dry-run: ${{ steps.v.outputs.dry-run }}
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Resolve mode and version
+        id: v
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+          DRY_RUN_INPUT: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          project_version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          # Gated on the event rather than the ref: a dispatch can also be started from a tag in
+          # the web UI, and that must stay a dev build.
+          if [ "$EVENT" = "push" ]; then
+            version="${REF_NAME#v}"
+            if [ "$version" != "$project_version" ]; then
+              echo "::error::tag ${REF_NAME} implies version ${version}, but pyproject.toml has ${project_version}"
+              exit 1
+            fi
+            is_release=true
+            dry_run=false
+          else
+            if [[ "$project_version" == *dev* ]]; then
+              echo "::error::pyproject.toml version ${project_version} already has a dev segment"
+              exit 1
+            fi
+            # Derived rather than accepted as an input, so a dispatch can never overwrite a release.
+            version="${project_version}.dev${RUN_NUMBER}"
+            is_release=false
+            if [ "$EVENT" = "pull_request" ]; then
+              dry_run=true
+            else
+              dry_run="$DRY_RUN_INPUT"
+            fi
+          fi
+          {
+            echo "version=$version"
+            echo "is-release=$is_release"
+            echo "dry-run=$dry_run"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved version ${version} (release: ${is_release}, dry run: ${dry_run})"
+
+  artifacts-cicd:
+    needs: version
+    uses: aerospike/shared-workflows/.github/workflows/reusable_artifacts-cicd.yaml@f7d1ce30b376733a51ea05b99f20646d0e248afc # unreleased main after v5.0.0
+    with:
+      gh-workflows-ref: f7d1ce30b376733a51ea05b99f20646d0e248afc # must match the @ref above
+      jf-project: connect
+      jf-build-name: agent-squad-aerospike
+      version: ${{ needs.version.outputs.version }}
+      build-type: ${{ needs.version.outputs.is-release == 'true' && 'release' || 'dev' }}
+      gh-artifact-directory: output
+      # The pypi deploy reads the version from the wheel metadata, so it is stamped into
+      # pyproject.toml before building. A release leaves the file unchanged.
+      build-script: >-
+        sed -i -E 's/^version = "[^"]*"$/version = "${{ needs.version.outputs.version }}"/' pyproject.toml &&
+        grep -qx 'version = "${{ needs.version.outputs.version }}"' pyproject.toml &&
+        python -m build && mkdir -p output && mv dist/*.whl dist/*.tar.gz output/
+      matrix-json: >-
+        {"include":[
+          {"runs-on":"ubuntu-22.04","distro":"python","arch":"x86_64",
+           "setup-python":true,"python-version":"3.12"}
+        ]}
+      oidc-provider-name: gh-aerospike
+      oidc-audience: aerospike
+      dry-run: ${{ needs.version.outputs.dry-run == 'true' }}
+    secrets:
+      gpg-private-key: ${{ secrets.GPG_SECRET_KEY }}
+      gpg-public-key: ${{ secrets.GPG_PUBLIC_KEY }}
+      gpg-key-pass: ${{ secrets.GPG_PASS }}
+
+  # A dev build creates no bundle: a promoted bundle locks its dev-local artifacts, and dev
+  # versions are never promoted.
+  create-release-bundle:
+    needs: [version, artifacts-cicd]
+    if: needs.version.outputs.is-release == 'true'
+    uses: aerospike/shared-workflows/.github/workflows/reusable_create-release-bundle.yaml@f7d1ce30b376733a51ea05b99f20646d0e248afc # unreleased main after v5.0.0
+    with:
+      gh-workflows-ref: f7d1ce30b376733a51ea05b99f20646d0e248afc # must match the @ref above
+      jf-project: connect
+      jf-build-names: ${{ needs.artifacts-cicd.outputs.jf-build-name }}:${{ needs.artifacts-cicd.outputs.jf-build-id }}
+      jf-bundle-name: agent-squad-aerospike
+      version: ${{ needs.version.outputs.version }}
+      jf-bundle-revision: auto
+
+  promote-dev:
+    needs: create-release-bundle
+    uses: aerospike/shared-workflows/.github/workflows/reusable_promote-release-bundle.yaml@f7d1ce30b376733a51ea05b99f20646d0e248afc # unreleased main after v5.0.0
+    with:
+      gh-workflows-ref: f7d1ce30b376733a51ea05b99f20646d0e248afc # must match the @ref above
+      jf-project: connect
+      jf-bundle-name: agent-squad-aerospike
+      version: ${{ needs.create-release-bundle.outputs.bundle-version }}
+      target-stage: DEV
+
+  promote-test:
+    needs: [create-release-bundle, promote-dev]
+    uses: aerospike/shared-workflows/.github/workflows/reusable_promote-release-bundle.yaml@f7d1ce30b376733a51ea05b99f20646d0e248afc # unreleased main after v5.0.0
+    with:
+      gh-workflows-ref: f7d1ce30b376733a51ea05b99f20646d0e248afc # must match the @ref above
+      jf-project: connect
+      jf-bundle-name: agent-squad-aerospike
+      version: ${{ needs.create-release-bundle.outputs.bundle-version }}
+      target-stage: TEST
