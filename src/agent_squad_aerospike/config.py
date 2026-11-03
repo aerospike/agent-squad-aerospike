@@ -1,5 +1,26 @@
-
 from dataclasses import dataclass
+from typing import Literal
+
+
+@dataclass(frozen=True, slots=True)
+class TlsSettings:
+    ca_file: str | None = None
+    tls_name: str | None = None
+    client_cert_file: str | None = None
+    client_key_file: str | None = None
+    protocols: tuple[str, ...] | None = None
+    ciphers: tuple[str, ...] | None = None
+    for_login_only: bool = False
+
+    def __post_init__(self) -> None:
+        if (self.client_cert_file is None) != (self.client_key_file is None):
+            raise ValueError("client_cert_file and client_key_file must be configured together")
+        if self.tls_name is not None and not self.tls_name:
+            raise ValueError("tls_name must not be empty")
+        if self.protocols is not None and not self.protocols:
+            raise ValueError("protocols must not be empty; omit for SDK defaults")
+        if self.ciphers is not None and not self.ciphers:
+            raise ValueError("ciphers must not be empty; omit for SDK defaults")
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +39,8 @@ class AerospikeConfig:
     max_write_retries: int = 0
     username: str | None = None
     password: str | None = None
+    tls: TlsSettings | None = None
+    auth_mode: Literal["internal", "certificate"] = "internal"
 
     def __post_init__(self) -> None:
         if not self.seeds or any(not seed for seed in self.seeds):
@@ -45,6 +68,22 @@ class AerospikeConfig:
             raise ValueError("max_write_retries must not be negative")
         if (self.username is None) != (self.password is None):
             raise ValueError("username and password must be configured together")
+        if (
+            self.tls is not None
+            and self.tls.for_login_only
+            and (self.username is None or self.password is None)
+        ):
+            raise ValueError("for_login_only requires username and password")
+        if self.auth_mode not in ("internal", "certificate"):
+            raise ValueError("auth_mode must be 'internal' or 'certificate'")
+        if self.auth_mode == "certificate":
+            if self.username is not None or self.password is not None:
+                raise ValueError("auth_mode 'certificate' forbids username/password credentials")
+            if self.tls is None or self.tls.client_cert_file is None:
+                raise ValueError(
+                    "auth_mode 'certificate' requires TLS settings with a paired "
+                    "client certificate and key"
+                )
         if self.ttl_seconds is not None and self.ttl_seconds <= 0:
             raise ValueError("ttl_seconds must be positive")
         if self.ttl_seconds is None and self.membership_refresh_seconds is not None:

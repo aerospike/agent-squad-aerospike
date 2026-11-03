@@ -1,6 +1,6 @@
 services:
   aerospike:
-    image: aerospike/aerospike-server:8.1.2.5
+    image: aerospike/aerospike-server:8.2.0.1
     command: ["--config-file", "/opt/aerospike/etc/aerospike.conf"]
     ports:
       - "3000-3002:3000-3002"
@@ -12,6 +12,57 @@ services:
       interval: 2s
       timeout: 2s
       retries: 30
+
+  # Opt-in TLS fixture: Enterprise Edition eval image (single-node feature key
+  # baked in). Start with `docker compose --profile tls up -d aerospike-tls`.
+  # Tested image: aerospike/aerospike-server-enterprise:8.2.0.1
+  tls-certs-init:
+    profiles: ["tls"]
+    image: &tls-image ${AEROSPIKE_TLS_IMAGE:-aerospike/aerospike-server-enterprise:8.2.0.1@sha256:ac93616c66bda965098b65a4138df585987fb27daf5b77b8882119f7904a9a60}
+    entrypoint: ["timeout", "120", "sh", "/scripts/gen-tls-certs.sh"]
+    environment:
+      AEROSPIKE_TLS_CERT_DIR: /certs
+      AEROSPIKE_TLS_UID: ${AEROSPIKE_TLS_UID:-1000}
+      AEROSPIKE_TLS_GID: ${AEROSPIKE_TLS_GID:-1000}
+    volumes:
+      - ./docker/gen-tls-certs.sh:/scripts/gen-tls-certs.sh:ro
+      - ${AEROSPIKE_TLS_CERT_DIR:-./docker/tls-certs}:/certs
+
+  aerospike-tls:
+    profiles: ["tls"]
+    image: *tls-image
+    depends_on:
+      tls-certs-init:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${AEROSPIKE_TLS_PORT:-4433}:4333"
+    volumes:
+      - ./docker/aerospike-tls.conf:/etc/aerospike/aerospike.template.conf:ro
+      - ${AEROSPIKE_TLS_CERT_DIR:-./docker/tls-certs}/server:/opt/aerospike/certs:ro
+    healthcheck:
+      test: ["CMD", "asinfo", "--user", "admin", "--password", "admin", "-v", "status"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  tls-provision:
+    profiles: ["tls"]
+    image: *tls-image
+    entrypoint: ["timeout", "90", "sh", "/scripts/provision-pki-user.sh"]
+    depends_on:
+      aerospike-tls:
+        condition: service_healthy
+    volumes:
+      - ./docker/provision-pki-user.sh:/scripts/provision-pki-user.sh:ro
+      - ${AEROSPIKE_TLS_CERT_DIR:-./docker/tls-certs}:/certs:ro
+
+  tls-ready:
+    profiles: ["tls"]
+    image: *tls-image
+    entrypoint: ["sh", "-c", "echo 'TLS authentication ready; run host pytest to verify record operations.'"]
+    depends_on:
+      tls-provision:
+        condition: service_completed_successfully
 
   dynamodb:
     image: amazon/dynamodb-local:2.6.1

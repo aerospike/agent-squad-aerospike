@@ -1,4 +1,3 @@
-
 import asyncio
 import time
 from collections import OrderedDict
@@ -6,7 +5,7 @@ from collections.abc import Callable
 from datetime import timedelta
 from typing import Any, Optional, Union
 
-from aerospike_async import ResultCode
+from aerospike_native import ResultCode
 from aerospike_sdk import Behavior, ClusterDefinition, DataSet, ErrorStrategy, Host
 from aerospike_sdk.policy import Settings
 from agent_squad.storage.chat_storage import ChatStorage
@@ -45,21 +44,51 @@ class AerospikeChatStorage(ChatStorage):
     ) -> "AerospikeChatStorage":
         resolved = config or AerospikeConfig()
         if client_factory is not None:
+            if resolved.tls is not None:
+                raise ValueError("client_factory cannot satisfy configured TLS settings")
             client = client_factory(",".join(resolved.seeds))
             await client.connect()
         else:
-            hosts = [Host.of(*_parse_seed(seed)) for seed in resolved.seeds]
+            tls_name = resolved.tls.tls_name if resolved.tls is not None else None
+            hosts = []
+            for seed in resolved.seeds:
+                name, seed_tls_name, port = _parse_seed(seed)
+                if seed_tls_name is not None and resolved.tls is None:
+                    raise ValueError(
+                        f"Seed {seed!r} carries a TLS name but no TLS settings are configured"
+                    )
+                effective_tls_name = seed_tls_name or tls_name
+                if resolved.auth_mode == "certificate" and effective_tls_name is None:
+                    raise ValueError(
+                        f"auth_mode 'certificate' requires a TLS name for seed {seed!r}"
+                    )
+                hosts.append(Host(name, port, effective_tls_name))
             definition = ClusterDefinition(hosts=hosts)
-            if resolved.username is not None or resolved.password is not None:
+            if resolved.tls is not None:
+                tls = resolved.tls
+                definition.with_tls_config(
+                    ca_file=tls.ca_file,
+                    tls_name=tls.tls_name,
+                    client_cert_file=tls.client_cert_file,
+                    client_key_file=tls.client_key_file,
+                    protocols=list(tls.protocols) if tls.protocols is not None else None,
+                    ciphers=list(tls.ciphers) if tls.ciphers is not None else None,
+                    for_login_only=tls.for_login_only,
+                )
+            if resolved.auth_mode == "certificate":
+                definition.with_certificate_credentials()
+            elif resolved.username is not None or resolved.password is not None:
                 if resolved.username is None or resolved.password is None:
                     raise ValueError("username and password must be configured together")
                 definition.with_native_credentials(resolved.username, resolved.password)
             client = await definition.connect()
         behavior = Behavior.DEFAULT.derive_with_changes(
             "agent_squad_aerospike",
+            all=Settings(
+                total_timeout=timedelta(milliseconds=resolved.total_timeout_ms),
+                socket_timeout=timedelta(milliseconds=resolved.socket_timeout_ms),
+            ),
             writes=Settings(max_retries=resolved.max_write_retries),
-            total_timeout=timedelta(milliseconds=resolved.total_timeout_ms),
-            socket_timeout=timedelta(milliseconds=resolved.socket_timeout_ms),
         )
         return cls(client.create_session(behavior), resolved, owned_client=client)
 
@@ -252,7 +281,9 @@ class AerospikeChatStorage(ChatStorage):
             keys.append(key)
             key_to_agent[(key.namespace, key.set_name, key.value)] = agent_id
         stream = await (
-            self._session.query(*keys).respond_all_keys().execute(on_error=ErrorStrategy.IN_STREAM)
+            self._session.query(*keys)
+            .include_missing_keys()
+            .execute(on_error=ErrorStrategy.IN_STREAM)
         )
         merged: list[tuple[int, str, int, Any]] = []
         index = 0
@@ -276,22 +307,39 @@ class AerospikeChatStorage(ChatStorage):
         return [item[3] for item in merged]
 
 
-def _parse_seed(seed: str) -> tuple[str, int]:
+def _parse_seed(seed: str) -> tuple[str, str | None, int]:
     if seed.startswith("["):
-        host, separator, port = seed[1:].partition("]:")
+        host, separator, rest = seed[1:].partition("]:")
+        if not separator or not host:
+            raise ValueError(f"Invalid Aerospike seed {seed!r}; expected host:port")
+        segments = rest.split(":")
     else:
-        host, separator, port = seed.rpartition(":")
-    if not separator or not host or not port:
+        if "]" in seed or "[" in seed:
+            raise ValueError(f"Invalid Aerospike seed {seed!r}; expected host:port")
+        parts = seed.split(":")
+        if len(parts) > 3:
+            host, separator, rest = seed.rpartition(":")
+            segments = [rest] if separator else []
+        else:
+            host = parts[0]
+            segments = parts[1:]
+    if not host:
+        raise ValueError(f"Invalid Aerospike seed {seed!r}; expected host:port")
+    if len(segments) == 1:
+        tls_name, port_text = None, segments[0]
+    elif len(segments) == 2:
+        tls_name, port_text = segments
+        if not tls_name:
+            raise ValueError(f"Invalid Aerospike seed {seed!r}; TLS name must not be empty")
+    else:
         raise ValueError(f"Invalid Aerospike seed {seed!r}; expected host:port")
     try:
-        return host, int(port)
+        return host, tls_name, int(port_text)
     except ValueError as exc:
         raise ValueError(f"Invalid Aerospike seed port in {seed!r}") from exc
 
 
-async def _zip_results(
-    key_to_agent: dict[tuple[str, str, str], str], stream: Any
-) -> Any:
+async def _zip_results(key_to_agent: dict[tuple[str, str, str], str], stream: Any) -> Any:
     async for result in stream:
         key = result.key
         agent_id = key_to_agent.get((key.namespace, key.set_name, key.value))

@@ -1,4 +1,3 @@
-
 from typing import get_type_hints
 
 from agent_squad.storage.chat_storage import ChatStorage
@@ -16,6 +15,7 @@ def test_package_imports() -> None:
         "AmbiguousWriteError",
         "ConversationTooLargeError",
         "DirectoryFullError",
+        "TlsSettings",
         "UnknownMessageSchemaError",
     } == set(agent_squad_aerospike.__all__)
 

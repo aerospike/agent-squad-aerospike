@@ -1,6 +1,6 @@
 """Aerospike chat storage for Agent Squad."""
 
-from .config import AerospikeConfig
+from .config import AerospikeConfig, TlsSettings
 from .exceptions import (
     AgentSquadAerospikeError,
     AmbiguousWriteError,
@@ -17,5 +17,6 @@ __all__ = [
     "AmbiguousWriteError",
     "ConversationTooLargeError",
     "DirectoryFullError",
+    "TlsSettings",
     "UnknownMessageSchemaError",
 ]
