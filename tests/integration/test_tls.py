@@ -1,9 +1,8 @@
 """Opt-in TLS integration tests.
 
-Run against the Enterprise Edition fixture:
-    sh docker/gen-tls-certs.sh
-    docker compose --profile tls up -d aerospike-tls
-    sh docker/provision-pki-user.sh
+Run against the Enterprise Edition fixture (Docker Compose >= 5.1.3):
+    AEROSPIKE_TLS_UID=$(id -u) AEROSPIKE_TLS_GID=$(id -g) \
+    docker compose --profile tls run --rm tls-ready
     AEROSPIKE_TLS_SEED=127.0.0.1:aerospike-tls:4433 \
     AEROSPIKE_TLS_CA=docker/tls-certs/ca.crt \
     pytest -m tls

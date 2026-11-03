@@ -104,18 +104,32 @@ The included server uses namespace `test`, persistent file-backed storage, ports
 
 Aerospike is a smart client database. Applications must directly reach every advertised cluster node. Multiple seeds improve bootstrap resilience but are not a proxy data path; do not put a generic load balancer in front of seed hosts. Configure credentials and advertised or alternate addresses so every discovered node remains reachable.
 
-The repository also carries an opt-in TLS test fixture for development (not required for normal runs):
+The repository also carries an opt-in TLS test fixture for development (not required for normal runs). It requires Docker Compose **5.1.3 or later**; host OpenSSL is not required for setup:
 
 ```shell
-sh docker/gen-tls-certs.sh                                  # throwaway PKI material
-docker compose --profile tls up -d --wait aerospike-tls     # EE eval image
-sh docker/provision-pki-user.sh                             # map cert CN to a user
+AEROSPIKE_TLS_UID=$(id -u) AEROSPIKE_TLS_GID=$(id -g) \
+docker compose --profile tls run --rm tls-ready
+
 AEROSPIKE_TLS_SEED=127.0.0.1:aerospike-tls:4433 \
 AEROSPIKE_TLS_CA=docker/tls-certs/ca.crt \
 pytest -m tls
 ```
 
-The fixture runs the released `aerospike/aerospike-server-enterprise:8.2.0.1` image — its single-node eval feature key is baked in, so it is suitable only for a one-node test target. `AEROSPIKE_TLS_IMAGE` and the other `AEROSPIKE_TLS_*` variables in `tests/integration/test_tls.py` override fixture details. Without the env vars the `tls` tests skip cleanly.
+The setup command generates throwaway certificates, waits for an authenticated server healthcheck, provisions the PKI-only `agent-squad-client` user with the `read-write` role, and verifies authentication using its certificate. It exits nonzero if any step fails. Successful setup means **authentication ready**, not a verified record write/read; the host TLS tests perform that round-trip and the negative cases. Always target `tls-ready` for complete setup: starting only `aerospike-tls` does not run downstream provisioning. Repeat the same command after server recreation; it rechecks certificates and provisions against the current server without rotating keys. Image pulls are subject to Docker's network behavior; init and provisioning processes have timeouts and server health retries are bounded.
+
+Generated material stays in the ignored `docker/tls-certs/` directory. Keys are mode `0600`, directories are `0700`, and the UID/GID assignments above make them readable by the host test user. The pinned server runs as root and receives only its server certificate/key and trusted CA in a read-only mount. Only the TLS endpoint is published, on loopback; the plaintext bootstrap endpoint remains internal to the Compose network. These are unencrypted development-only keys and public fixture admin credentials, not production PKI.
+
+New certificates are X.509 v3 and valid for **30 days**. Complete, valid existing material is validated and reused, including legacy material, without changing certificate fingerprints. Partial, expired, inconsistent, or unsupported material fails with reset guidance rather than being silently replaced. Concurrent initialization fails on the lock; an interrupted run can leave staging material or a stale lock. Inspect failures with `docker compose --profile tls logs tls-certs-init aerospike-tls tls-provision`.
+
+For an explicit reset, first stop every fixture using that certificate directory:
+
+```shell
+docker compose --profile tls stop tls-provision aerospike-tls tls-certs-init
+```
+
+Once stopped, explicitly remove **only** the generated `docker/tls-certs/` directory, including any stale lock/staging entries, then rerun setup. This discards the fixture keys; do not remove them while a server is using them. Do not delete unrelated volumes or use `down -v` for a certificate reset. If only user state has drifted, inspect it before deliberately correcting or recreating the disposable TLS server; setup will not silently rewrite an incompatible existing user.
+
+The fixture runs the pinned released `aerospike/aerospike-server-enterprise:8.2.0.1` image — its single-node eval feature key is baked in, so it is suitable only for a one-node test target. `AEROSPIKE_TLS_IMAGE` overrides the Compose image (replacement images must provide the same tools and runtime access). `AEROSPIKE_TLS_PORT` overrides the published port, and `AEROSPIKE_TLS_CERT_DIR` overrides the host certificate directory. When changing these, also set the corresponding seed, CA, client, and negative-test file overrides in `tests/integration/test_tls.py`. Without the seed and CA env vars the `tls` tests skip cleanly; ordinary Community Edition startup does not select any TLS helper.
 
 Vector search and AVS, graph/AGS, TypeScript, Swift, multi-record transactions, durable deletes, rack awareness, and directory sharding are outside this package's scope.
 
